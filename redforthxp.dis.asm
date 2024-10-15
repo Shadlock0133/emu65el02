@@ -426,7 +426,7 @@ pull_r:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
-; ( addr value -- )
+; ( value addr -- )
 store:
   plx
   pla
@@ -464,7 +464,7 @@ dec_word:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
-; ( addr value -- )
+; ( value addr -- )
 c_store:
   plx
   pla

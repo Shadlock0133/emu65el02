@@ -1,16 +1,5 @@
 use core::fmt;
 
-// struct Cpu {
-//     a: u16,
-//     sp: u16,
-//     x: u16,
-//     y: u16,
-// }
-
-// struct Interconnect {
-//     cpu: Cpu,
-// }
-
 pub struct Instruction {
     pub opcode: Opcode,
     pub argument: Option<Arguments>,
