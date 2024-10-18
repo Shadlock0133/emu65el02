@@ -7,6 +7,8 @@ use std::{
 };
 
 use emu65el02::Decoder;
+use image::{GenericImageView, Pixel, Rgba};
+use minifb::WindowOptions;
 
 const RPCBOOT: &[u8] = include_bytes!("../../rpcboot.bin");
 const FLAG_C: u8 = 0x01;
@@ -91,7 +93,16 @@ impl Disk {
 }
 
 #[derive(Default)]
-struct DiskDrive(Option<Disk>, u16);
+struct DiskDrive(Option<Disk>);
+
+#[derive(Default, Debug)]
+struct Display {
+    cursor: (u8, u8),
+    mode: u8,
+    blit_start: (u8, u8),
+    blit_offset: (u8, u8),
+    blit_size: (u8, u8),
+}
 
 struct Interconnect {
     cpu: Cpu,
@@ -102,6 +113,7 @@ struct Interconnect {
     mm_window: u16,
     mm_state: bool,
     disk_drive: DiskDrive,
+    display: Display,
 }
 
 fn write_hex<W: Write>(mut w: W, data: &[u8], width: usize) {
@@ -153,6 +165,11 @@ impl Interconnect {
             self.set_n(value & 0x8000 != 0);
         }
     }
+
+    fn r_s(&mut self) -> u16 {
+        let rel = i8::from_le_bytes([self.read_byte_pc()]);
+        self.read_word(self.cpu.s.wrapping_add_signed(rel.into()))
+    }
 }
 
 impl Interconnect {
@@ -177,6 +194,7 @@ impl Interconnect {
             mm_state: false,
             mem: Mem::new(8),
             disk_drive: Default::default(),
+            display: Default::default(),
         }
     }
 
@@ -186,13 +204,23 @@ impl Interconnect {
         {
             let subaddr = addr - self.rb_window;
             match (self.device_id, subaddr) {
-                (0x01, _) => todo!(),
-                (0x02, 0x00..=0x7f) => self.mem[addr],
-                (0x02, 0x80) => self.disk_drive.1.to_le_bytes()[0],
-                (0x02, 0x81) => self.disk_drive.1.to_le_bytes()[1],
-                (0x02, 0x82) => self.mem[addr],
+                (0x01, 0x01) => self.display.cursor.0,
+                (0x01, 0x02) => self.display.cursor.1,
+                (0x01, 0x03) => self.display.mode,
+                (0x01, 0x07) => self.mem[addr],
+                (0x01, 0x08) => self.display.blit_start.0,
+                (0x01, 0x09) => self.display.blit_start.1,
+                (0x01, 0x0a) => self.display.blit_offset.0,
+                (0x01, 0x0b) => self.display.blit_offset.1,
+                (0x01, 0x0c) => self.display.blit_size.0,
+                (0x01, 0x0d) => self.display.blit_size.1,
+                (0x02, 0x00..=0x82) => self.mem[addr],
                 _ => todo!(),
             }
+        } else if self.mm_state
+            && (self.mm_window..self.mm_window + 0x100).contains(&addr)
+        {
+            todo!()
         } else {
             self.mem[addr]
         }
@@ -204,24 +232,31 @@ impl Interconnect {
         {
             let subaddr = addr - self.rb_window;
             match (self.device_id, subaddr, value) {
-                (0x01, _, _) => todo!(),
-                (0x02, 0x00..=0x7f, _) => self.mem[addr] = value,
-                (0x02, 0x80, _) => {
-                    let sector = &mut self.disk_drive.1;
-                    *sector =
-                        u16::from_le_bytes([value, sector.to_le_bytes()[1]])
+                (0x01, 0x00, _) => self.mem[addr] = value,
+                (0x01, 0x01, _) => self.display.cursor.0 = value,
+                (0x01, 0x02, _) => self.display.cursor.1 = value,
+                (0x01, 0x03, _) => self.display.mode = value,
+                (0x01, 0x07, _) => {
+                    self.mem[addr] = 1;
                 }
-                (0x02, 0x81, _) => {
-                    let sector = &mut self.disk_drive.1;
-                    *sector =
-                        u16::from_le_bytes([sector.to_le_bytes()[0], value])
+                (0x01, 0x08, _) => self.display.blit_start.0 = value,
+                (0x01, 0x09, _) => self.display.blit_start.1 = value,
+                (0x01, 0x0a, _) => self.display.blit_offset.0 = value,
+                (0x01, 0x0b, _) => self.display.blit_offset.1 = value,
+                (0x01, 0x0c, _) => self.display.blit_size.0 = value,
+                (0x01, 0x0d, _) => self.display.blit_size.1 = value,
+                (0x01, 0x10..=0x60, _) => {
+                    print!("{}", char::from(value));
                 }
+                (0x02, 0x00..=0x81, _) => self.mem[addr] = value,
                 (0x02, 0x82, 0x04) => {
+                    let sector = &self.mem[self.rb_window + 0x80..][..2];
+                    let sector = u16::from_le_bytes([sector[0], sector[1]]);
                     let buf = &mut self.mem[self.rb_window..][..0x80];
                     buf.fill(0);
                     let disk = self.disk_drive.0.as_mut();
                     let data = disk.and_then(|disk| {
-                        disk.data.get(usize::from(self.disk_drive.1) * 0x80..)
+                        disk.data.get(usize::from(sector) * 0x80..)
                     });
                     if let Some(data) = data {
                         let data = &data[..0x80.min(data.len())];
@@ -231,8 +266,15 @@ impl Interconnect {
                         self.mem[addr] = 0xff;
                     }
                 }
-                _ => todo!(),
+                _ => todo!(
+                    "device {:#04x}: write {subaddr:#04x}",
+                    self.device_id
+                ),
             }
+        } else if self.mm_state
+            && (self.mm_window..self.mm_window + 0x100).contains(&addr)
+        {
+            todo!()
         } else {
             self.mem[addr] = value;
         }
@@ -257,10 +299,21 @@ impl Interconnect {
     }
 
     fn zp(&mut self) -> u16 {
-        let addr = self.read_byte_pc();
-        let a = self.read_byte(u16::from(addr));
+        let addr = u16::from(self.read_byte_pc());
+        let a = self.read_byte(addr);
         let b = if !self.m() {
-            self.read_byte(u16::from(addr) + 1)
+            self.read_byte(addr + 1)
+        } else {
+            0
+        };
+        u16::from_le_bytes([a, b])
+    }
+
+    fn zpx(&mut self) -> u16 {
+        let addr = u16::from(self.read_byte_pc()) + self.cpu.x;
+        let a = self.read_byte(addr);
+        let b = if !self.m() {
+            self.read_byte(addr + 1)
         } else {
             0
         };
@@ -279,10 +332,20 @@ impl Interconnect {
     }
 
     fn set_zp(&mut self, value: u16) {
-        let zp = self.read_byte_pc();
-        self.write_byte(u16::from(zp), value.to_le_bytes()[0]);
+        let [a, b] = value.to_le_bytes();
+        let addr = u16::from(self.read_byte_pc());
+        self.write_byte(addr, a);
         if !self.m() {
-            self.write_byte(u16::from(zp) + 1, value.to_le_bytes()[1]);
+            self.write_byte(addr + 1, b);
+        }
+    }
+
+    fn set_zpx(&mut self, value: u16) {
+        let [a, b] = value.to_le_bytes();
+        let addr = u16::from(self.read_byte_pc()) + self.cpu.x;
+        self.write_byte(addr, a);
+        if !self.m() {
+            self.write_byte(addr + 1, b);
         }
     }
 
@@ -339,6 +402,19 @@ impl Interconnect {
         self.write_byte(self.cpu.s, a);
     }
 
+    fn pull_r(&mut self) -> u16 {
+        let a = if !self.m() {
+            let a = self.read_byte(self.cpu.r);
+            self.cpu.r += 1;
+            a
+        } else {
+            0
+        };
+        let b = self.read_byte(self.cpu.r);
+        self.cpu.r += 1;
+        u16::from_le_bytes([a, b])
+    }
+
     fn pull_s(&mut self) -> u16 {
         let a = if !self.m() {
             let a = self.read_byte(self.cpu.s);
@@ -376,7 +452,7 @@ impl Interconnect {
             0x01 => self.rb_window = self.cpu.a,
             0x02 => self.rb_state = true,
             0x82 => self.rb_state = false,
-            0x03 => eprintln!("set mm window: {:#04x}", self.cpu.a),
+            0x03 => self.mm_window = self.cpu.a,
             0x04 => self.mm_state = true,
             0x84 => self.mm_state = false,
             0x06 => eprintln!("set por: {:#04x}", self.cpu.a),
@@ -387,6 +463,40 @@ impl Interconnect {
     fn zp_do<T>(&mut self, f: fn(&mut u16) -> T) -> T {
         let addr: u16 = self.read_byte_pc().into();
         let mut value = self.read_word(addr);
+        let res = f(&mut value);
+        let [a, b] = value.to_le_bytes();
+        self.write_byte(addr, a);
+        if !self.m() {
+            self.write_byte(addr + 1, b);
+        }
+        res
+    }
+    fn zpx_do<T>(&mut self, f: impl Fn(&mut u16) -> T) -> T {
+        let addr = u16::from(self.read_byte_pc()) + self.cpu.x;
+        let a = self.read_byte(addr);
+        let b = if !self.m() {
+            self.read_byte(addr + 1)
+        } else {
+            0
+        };
+        let mut value = u16::from_le_bytes([a, b]);
+        let res = f(&mut value);
+        let [a, b] = value.to_le_bytes();
+        self.write_byte(addr, a);
+        if !self.m() {
+            self.write_byte(addr + 1, b);
+        }
+        res
+    }
+    fn r_s_do<T>(&mut self, f: impl Fn(&mut u16) -> T) -> T {
+        let addr = u16::from(self.read_byte_pc()) + self.cpu.s;
+        let a = self.read_byte(addr);
+        let b = if !self.m() {
+            self.read_byte(addr + 1)
+        } else {
+            0
+        };
+        let mut value = u16::from_le_bytes([a, b]);
         let res = f(&mut value);
         let [a, b] = value.to_le_bytes();
         self.write_byte(addr, a);
@@ -416,27 +526,47 @@ impl Interconnect {
                 self.cpu.i += 2;
             }
             0x18 => self.set_c(false),
+            0x1a => self.cpu.a += 1,
             0x22 => {
                 self.push_r(self.cpu.i);
                 self.cpu.i = self.cpu.pc + 2;
                 self.cpu.pc = self.read_word_pc();
             }
+            0x2b => self.cpu.i = self.pull_r(),
+            0x30 => self.branch(self.n()),
             0x38 => self.set_c(true),
+            0x3a => self.cpu.a -= 1,
             0x42 => {
                 self.cpu.a = self.read_word(self.cpu.i);
                 self.cpu.i += 2;
             }
             0x48 => self.push_s(self.cpu.a),
+            0x4b => self.push_r(self.cpu.a),
             0x4c => self.cpu.pc = self.read_word_pc(),
+            0x49 => self.cpu.a ^= self.read_word_pc(),
             0x5c => self.cpu.i = self.cpu.x,
+            0x63 => self.cpu.a += self.r_s(),
             0x64 => self.set_zp(0),
+            0x68 => self.cpu.a = self.pull_s(),
+            0x6b => self.cpu.a = self.pull_r(),
+            0x83 => self.r_s_do({
+                let a = self.cpu.a;
+                move |x| *x = a
+            }),
             0x85 => self.set_zp(self.cpu.a),
             0x88 => {
                 self.cpu.y = self.cpu.y.wrapping_sub(1);
                 self.set_flags(self.cpu.y, FLAG_N | FLAG_Z);
             }
             0x8d => self.set_abs(self.cpu.a),
+            0x8f => {
+                self.cpu.d = 0;
+                if !self.m() {
+                    self.cpu.a &= 0xff;
+                }
+            }
             0x92 => self.set_ind(self.cpu.a),
+            0x95 => self.set_zpx(self.cpu.a),
             0xa0 => {
                 let value = self.read_word_pc();
                 self.ldy(value)
@@ -445,6 +575,7 @@ impl Interconnect {
                 let value = self.read_word_pc();
                 self.ldx(value)
             }
+            0xa3 => self.cpu.a = self.r_s(),
             0xa5 => {
                 let value = self.zp();
                 self.lda(value)
@@ -454,21 +585,39 @@ impl Interconnect {
                 let b = if !self.m() { self.read_byte_pc() } else { 0 };
                 self.lda(u16::from_le_bytes([a, b]));
             }
+            0xaa => self.cpu.x = self.cpu.a,
             0xad => {
                 let value = self.abs();
                 self.lda(value)
             }
+            0xb5 => {
+                let value = self.zpx();
+                self.lda(value)
+            }
+            0xba => self.cpu.x = self.cpu.s,
             0xc2 => self.cpu.p &= !self.read_byte_pc(),
-            0xcb => (),
+            0xc3 => {
+                let value = self.r_s();
+                self.cmp(value)
+            }
+            0xcb => (), // wai
             0xcd => {
                 let value = self.abs();
                 self.cmp(value)
             }
+            0xcf => self.cpu.d = self.pull_s(),
             0xd0 => self.branch(!self.z()),
+            0xda => self.push_s(self.cpu.x),
+            0xdc => self.cpu.x = self.cpu.i,
             0xe2 => self.cpu.p |= self.read_byte_pc(),
+            0xe3 => self.cpu.a -= self.r_s(),
             0xe6 => self.zp_do(|x| *x = x.wrapping_add(1)),
             0xef => self.mmu(),
             0xf0 => self.branch(self.z()),
+            0xf4 => {
+                let value = self.read_word_pc();
+                self.push_s(value)
+            }
             0xfa => self.cpu.x = self.pull_s(),
             0xfb => {
                 let mut c = self.c();
@@ -481,11 +630,94 @@ impl Interconnect {
     }
 }
 
+fn paste_bg_x2<I: GenericImageView<Pixel = Rgba<u8>>>(
+    buf: &mut [u32],
+    width: usize,
+    image_view: &I,
+) {
+    for (x, y, p) in image_view.pixels() {
+        let i = usize::try_from(y * u32::try_from(width).unwrap() + x).unwrap();
+        let mut color = Rgba(buf[i * 2].to_le_bytes());
+        color.blend(&p);
+        buf[i * 2] = u32::from_le_bytes(color.0);
+        buf[i * 2 + 1] = u32::from_le_bytes(color.0);
+        buf[i * 2 + width] = u32::from_le_bytes(color.0);
+        buf[i * 2 + width + 1] = u32::from_le_bytes(color.0);
+    }
+}
+
+fn blend_font<I: GenericImageView<Pixel = Rgba<u8>>>(
+    buf: &mut [u32],
+    width: u32,
+    x: u32,
+    y: u32,
+    image_view: &I,
+) {
+    for (dx, dy, mut p) in image_view.pixels() {
+        p.0[0] = 0;
+        p.0[2] = 0;
+        let i = usize::try_from((y + dy) * width + (x + dx)).unwrap();
+        if let Some(b) = buf.get_mut(i) {
+            let mut color = Rgba(b.to_le_bytes());
+            color.blend(&p);
+            *b = u32::from_le_bytes(color.0);
+        }
+    }
+}
+
+const WIDTH: u32 = 350;
+const WIDTH_U: usize = 350;
+const HEIGHT: u32 = 230;
+const HEIGHT_U: usize = 230;
+
+const OFFSET: [u32; 2] = [30, 30];
+
 fn main() {
     let rom = fs::read(env::args_os().nth(1).unwrap()).unwrap();
     let mut interconnect = Interconnect::new();
     interconnect.disk_drive.0 = Some(Disk::new("System disk", rom));
-    loop {
-        interconnect.step();
+    let texture = image::open("displaygui.png").unwrap().into_rgba8();
+    let bg = texture.view(0, 0, WIDTH, HEIGHT);
+    let font = texture.view(WIDTH, 0, 128, 128);
+    let mut window = minifb::Window::new(
+        "emu65el02",
+        WIDTH_U * 2,
+        HEIGHT_U * 2,
+        WindowOptions {
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut buf = vec![0u32; WIDTH_U * 2 * HEIGHT_U * 2];
+    paste_bg_x2(&mut buf, WIDTH_U * 2, &*bg);
+    // let ch = font.view(0, 24, 8, 8);
+    // for y in 0..50 {
+    //     blend_font(&mut buf, WIDTH * 2, OFFSET[0], OFFSET[1] + 8 * y, &*ch);
+    // }
+    // for x in 0..80 {
+    //     blend_font(&mut buf, WIDTH * 2, OFFSET[0] + 8 * x, OFFSET[1], &*ch);
+    // }
+    window
+        .update_with_buffer(&buf, WIDTH_U * 2, HEIGHT_U * 2)
+        .unwrap();
+    while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
+        paste_bg_x2(&mut buf, WIDTH_U * 2, &*bg);
+        window
+            .update_with_buffer(&buf, WIDTH_U * 2, HEIGHT_U * 2)
+            .unwrap();
+        for _ in 0..1000 {
+            // if interconnect.cpu.pc == 0xec7 {
+            //     static COUNT: AtomicU8 = AtomicU8::new(0);
+            //     if COUNT.fetch_add(1, Ordering::AcqRel) >= 1 {
+            //         panic!("CR")
+            //     }
+            // }
+
+            if interconnect.cpu.pc == 0x1829 {
+                panic!("QUIT")
+            }
+
+            interconnect.step();
+        }
     }
 }
