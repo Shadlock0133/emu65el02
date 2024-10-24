@@ -97,19 +97,28 @@ struct DiskDrive(Option<Disk>);
 
 #[derive(Debug)]
 struct Display {
-    blit_start: (u8, u8),
-    blit_offset: (u8, u8),
-    blit_size: (u8, u8),
+    key_buffer: [u8; 16],
+    key_start: u8,
+    key_end: u8,
     buffer: [u8; 80 * 50],
 }
 
 impl Default for Display {
     fn default() -> Self {
         Self {
-            blit_start: Default::default(),
-            blit_offset: Default::default(),
-            blit_size: Default::default(),
+            key_buffer: [0; 16],
+            key_start: 0,
+            key_end: 0,
             buffer: [b' '; 80 * 50],
+        }
+    }
+}
+
+impl Display {
+    pub fn try_push_key(&mut self, value: u8) {
+        if (self.key_start + 1) % 16 != self.key_end {
+            self.key_buffer[usize::from(self.key_end)] = value;
+            self.key_end = (self.key_end + 1) % 16;
         }
     }
 }
@@ -226,7 +235,13 @@ impl Interconnect {
         {
             let subaddr = addr - self.rb_window;
             match (self.device_id, subaddr) {
-                (0x01, 0x00..=0x0d) => self.mem[addr],
+                (0x01, 0x00..=0x03) => self.mem[addr],
+                (0x01, 0x04) => self.display.key_start,
+                (0x01, 0x05) => self.display.key_end,
+                (0x01, 0x06) => {
+                    self.display.key_buffer[usize::from(self.display.key_start)]
+                }
+                (0x01, 0x07..=0x0d) => self.mem[addr],
                 (0x02, 0x00..=0x82) => self.mem[addr],
                 _ => todo!(),
             }
@@ -698,8 +713,10 @@ const OFFSET: [u32; 2] = [30, 30];
 
 fn main() {
     let rom = fs::read(env::args_os().nth(1).unwrap()).unwrap();
+
     let mut interconnect = Interconnect::new();
     interconnect.disk_drive.0 = Some(Disk::new("System disk", rom));
+    
     let texture = image::open("displaygui.png").unwrap().into_rgba8();
     let bg = texture.view(0, 0, WIDTH, HEIGHT);
     let font = texture.view(WIDTH, 0, 128, 128);
@@ -717,7 +734,11 @@ fn main() {
     window
         .update_with_buffer(&buf, WIDTH_U * 2, HEIGHT_U * 2)
         .unwrap();
+    
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
+        for key in window.get_keys() {
+            interconnect.display.try_push_key(key as u8);
+        }
         paste_bg_x2(&mut buf, WIDTH_U * 2, &*bg);
         for y in 0..50u8 {
             for x in 0..80u8 {
@@ -741,6 +762,7 @@ fn main() {
         window
             .update_with_buffer(&buf, WIDTH_U * 2, HEIGHT_U * 2)
             .unwrap();
+    
         for _ in 0..1000 {
             interconnect.step();
         }
