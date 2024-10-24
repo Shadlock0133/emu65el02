@@ -1559,7 +1559,9 @@ rbp_store:
 ; stores terminal device id
 TERMADDR:
   ent
-  !16 DOVAR, 0x0001
+  !16 DOVAR
+termaddr_val:
+  !16 0x0001
 
 !text 0, "PAGE", 0 ; name
 !8 .FLAG_NONE
@@ -1727,7 +1729,7 @@ EMIT:
 BS:
   sep #$20
 !as
-  lda $0dc4
+  lda termaddr_val
   mmu #$00
   lda $0301
   beq .BS_0
@@ -1750,7 +1752,7 @@ BS:
 is_key:
   sep #$20
 !as
-  lda $0dc4
+  lda termaddr_val
   mmu #$00
   lda $0304
   cmp $0305
@@ -1770,7 +1772,7 @@ is_key:
 KEY:
   sep #$20
 !as
-  lda $0dc4
+  lda termaddr_val
   mmu #$00
 .KEY_1:
   lda $0304
@@ -1794,7 +1796,7 @@ KEY:
 at_xy:
   sep #$20
 !as
-  lda $0dc4
+  lda termaddr_val
   mmu #$00
   plx
   txa
