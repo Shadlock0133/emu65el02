@@ -28,10 +28,10 @@ next_sector:
 // wait for interrupt for new data
 wait:
   wai
-// check disk drive status
+// check disk drive status if command finished
   cmp $0382
   beq wait
-// 
+// check if success
   lda $0382
   beq continue
 exit:

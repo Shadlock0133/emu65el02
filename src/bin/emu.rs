@@ -187,7 +187,8 @@ impl Interconnect {
         let lhs = i32::from_le_bytes([a[0], a[1], d[0], d[1]]);
         let value = lhs
             .checked_div(i16::from_le_bytes(rhs.to_le_bytes()).into())
-            .unwrap_or(0).to_le_bytes();
+            .unwrap_or(0)
+            .to_le_bytes();
         self.cpu.a = u16::from_le_bytes([value[0], value[1]]);
         self.cpu.d = u16::from_le_bytes([value[2], value[3]]);
     }
@@ -225,8 +226,7 @@ impl Interconnect {
         {
             let subaddr = addr - self.rb_window;
             match (self.device_id, subaddr) {
-                (0x01, 0x00..=0x03) => self.mem[addr],
-                (0x01, 0x07..=0x0d) => self.mem[addr],
+                (0x01, 0x00..=0x0d) => self.mem[addr],
                 (0x02, 0x00..=0x82) => self.mem[addr],
                 _ => todo!(),
             }
@@ -543,6 +543,7 @@ impl Interconnect {
                 self.cpu.i = self.cpu.pc + 2;
                 self.cpu.pc = self.read_word_pc();
             }
+            0x2a => self.cpu.a = self.cpu.a.rotate_left(1),
             0x2b => self.cpu.i = self.rl(),
             0x30 => self.branch(self.n()),
             0x38 => self.set_c(true),
@@ -560,12 +561,15 @@ impl Interconnect {
             0x5f => {
                 let rhs = self.zpx();
                 self.div(rhs)
-            },
+            }
+            0x60 => self.cpu.pc = self.pl() + 1,
             0x63 => self.cpu.a += self.r_s(),
             0x64 => self.set_zp(0),
             0x68 => self.cpu.a = self.pl(),
+            0x6a => self.cpu.a = self.cpu.a.rotate_right(1),
             0x6b => self.cpu.a = self.rl(),
             0x7a => self.cpu.y = self.pl(),
+            0x80 => self.branch(true),
             0x83 => self.r_s_do({
                 let a = self.cpu.a;
                 move |x| *x = a
@@ -575,6 +579,7 @@ impl Interconnect {
                 self.cpu.y = self.cpu.y.wrapping_sub(1);
                 self.set_flags(self.cpu.y, FLAG_N | FLAG_Z);
             }
+            0x8b => self.cpu.r = self.cpu.x,
             0x8d => self.set_abs(self.cpu.a),
             0x8f => {
                 self.cpu.d = 0;
@@ -584,6 +589,7 @@ impl Interconnect {
             }
             0x92 => self.set_ind(self.cpu.a),
             0x95 => self.set_zpx(self.cpu.a),
+            0x9a => self.cpu.s = self.cpu.x,
             0xa0 => {
                 let value = self.read_word_pc();
                 self.ldy(value)

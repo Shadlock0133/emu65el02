@@ -228,6 +228,7 @@ J:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( target+1 -- )
 EXECUTE:
   plx
   dex
@@ -248,6 +249,8 @@ DUP:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- a a ) if a != 0
+; ( 0 -- 0 )
 dup_if:
   lda $00,s
   beq .dup_if_0
@@ -302,6 +305,7 @@ SWAP:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( .. n -- .. s[n] )
 PICK:
   pla
   clc
@@ -506,6 +510,7 @@ c_load:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( b a -- a+b )
 _add:
   pla
   clc
@@ -517,6 +522,7 @@ _add:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( b a -- a-b )
 _sub:
   lda $02,s
   sec
@@ -650,6 +656,7 @@ um_div_mod:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- 2a )
 mul2:
   pla
   clc
@@ -661,6 +668,7 @@ mul2:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- a/2 )
 div2:
   lda $00,s
   rol
@@ -706,6 +714,7 @@ shl:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( b a -- a&b )
 _and:
   pla
   and $00,s
@@ -716,6 +725,7 @@ _and:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( b a -- a|b )
 OR:
   pla
   ora $00,s
@@ -726,6 +736,7 @@ OR:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( b a -- a^b )
 XOR:
   pla
   eor $00,s
@@ -736,6 +747,7 @@ XOR:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- !a )
 INVERT:
   pla
   eor #$ffff
@@ -746,6 +758,7 @@ INVERT:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- -a )
 NEGATE:
   pla
   eor #$ffff
@@ -757,6 +770,7 @@ NEGATE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- a+1 )
 add1:
   pla
   inc
@@ -767,6 +781,7 @@ add1:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( a -- a-1 )
 sub1:
   pla
   dec
@@ -817,6 +832,8 @@ rp_store:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( 0 -- TRUE )
+; ( a -- FALSE )
 eq0:
   pla
   beq .eq0_0
@@ -830,6 +847,8 @@ eq0:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( 0 -- FALSE )
+; ( a -- TRUE )
 neq0:
   pla
   beq .neq0_0
@@ -971,6 +990,7 @@ ge:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( b a -- a==b )
 eq:
   pla
   cmp $00,s
@@ -996,7 +1016,7 @@ CELL:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
-; ( a -- 2*a )
+; ( a -- 2a )
 CELLS:
   pla
   clc
@@ -1170,6 +1190,7 @@ RSTRLEN:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( -- TRUE )
 TRUE:
   ent
   !16 DOCON, 0xffff
@@ -1178,6 +1199,7 @@ TRUE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( -- FALSE )
 FALSE:
   ent
   !16 DOCON, 0x0000
@@ -1194,6 +1216,7 @@ SCRATCH:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; terminal input buffer
 TIB:
   ent
   !16 DOCON, 0x0080
@@ -1202,6 +1225,7 @@ TIB:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; current number base
 RADIX:
   ent
   !16 DOVAR, 0x000a
@@ -1210,6 +1234,7 @@ RADIX:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( -- 32 )
 BL:
   ent
   !16 DOCON, 0x0020
@@ -1488,6 +1513,7 @@ ATOI:
 !8 .FLAG_IMM
 !16 prev
 !set prev = *
+; set base to hexadecimal (16)
 HEX:
   ent
   !16 lit, 0x0010
@@ -1499,6 +1525,7 @@ HEX:
 !8 .FLAG_IMM
 !16 prev
 !set prev = *
+; set base to decimal (10)
 DECIMAL:
   ent
   !16 lit, 0x000a
@@ -1518,6 +1545,8 @@ TICK:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( dev_id -- )
+; sets device id on redbus
 rbp_store:
   pla
   mmu #$00
@@ -1527,6 +1556,7 @@ rbp_store:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; stores terminal device id
 TERMADDR:
   ent
   !16 DOVAR, 0x0001
@@ -1535,6 +1565,7 @@ TERMADDR:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; cleans screen
 PAGE:
   ent
   !16 TERMADDR
@@ -1573,6 +1604,7 @@ PAGE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; move terminal's content one line up
 SCROLL:
   ent
   !16 TERMADDR
@@ -1626,6 +1658,7 @@ SCROLL:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; moves cursor to start of new line
 CR:
   ent
   !16 TERMADDR
@@ -1654,6 +1687,8 @@ CR:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; ( ch -- )
+; displays character
 EMIT:
   ent
   !16 TERMADDR
@@ -1688,6 +1723,7 @@ EMIT:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; backspace
 BS:
   sep #$20
 !as
@@ -1822,6 +1858,7 @@ TYPE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; prints top of stack as signed number
 print_int:
   ent
   !16 DUP
@@ -1845,6 +1882,7 @@ print_int:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; prints top of stack as unsigned number
 print_uint:
   ent
   !16 UITOA
@@ -1888,6 +1926,7 @@ MOD:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; cleans stack and runs QUIT
 ABORT:
   ent
   !16 SP0
@@ -1898,6 +1937,7 @@ ABORT:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; pointer into terminal input buffer
 TIBPTR:
   ent
   !16 DOVAR, 0x0000
@@ -1906,6 +1946,7 @@ TIBPTR:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; xt of latest word in vocabulary
 VOCAB:
   ent
   !16 DOVAR, COLD
@@ -1932,6 +1973,7 @@ HERE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; cached size of memory space
 TOP:
   ent
   !16 DOVAR, 0x0000
@@ -1940,6 +1982,7 @@ TOP:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; interpreter state, 0 - interpret, 1 - compile
 STATE:
   ent
   !16 DOVAR, 0x0000
@@ -1948,6 +1991,7 @@ STATE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; checks size of memory space, in blocks 0f 8k
 PROBE:
   ent
   !16 lit, 0x1fff
@@ -1983,6 +2027,7 @@ PROBE:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; free space between dictionary and end of memory
 FREE:
   ent
   !16 TOP
@@ -2778,6 +2823,7 @@ ACCEPT:
 !8 .FLAG_NONE
 !16 prev
 !set prev = *
+; clears stack
 _0sp:
   ent
   !16 SP0
