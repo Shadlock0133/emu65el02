@@ -18,7 +18,7 @@ start:
   lda #$0400
   mmu #$03
   mmu #$04
-  lda #$0500
+  lda #start
   mmu #$06
   jmp COLD
 
