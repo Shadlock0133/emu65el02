@@ -1,3 +1,7 @@
+pub mod op;
+pub mod mem;
+pub mod cpu;
+
 use core::fmt;
 
 pub struct Instruction {
