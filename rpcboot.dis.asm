@@ -1,70 +1,71 @@
-// disable 65c02 emulation
+!cpu 65el02
+; disable 65c02 emulation
   clc
   xce
-// map disk drive to redbus
+; map disk drive to redbus
   lda $00
   mmu #$00
-// enable 16bit index and mem
+; enable 16bit index and mem
   rep #$30
-// map redbus to 0x0300
+; map redbus to 0x0300
   lda #$0300
   mmu #$01
-// enable redbus
+; enable redbus
   mmu #$02
-// sector number @ 0x0002 = 0
+; sector number @ 0x0002 = 0
   stz $02
-// loaded data ptr @ 0x0004 = 0x0500
+; loaded data ptr @ 0x0004 = 0x0500
   lda #$0500
   sta $04
 next_sector:
-// disk drive sector = sector
+; disk drive sector = sector
   lda $02
   sta $0380
-// disable 16bit mem
+; disable 16bit mem
   sep #$20
-// set disk drive command to read data sector
+; set disk drive command to read data sector
   lda #$04
   sta $0382
-// wait for interrupt for new data
+; wait for interrupt for new data
 wait:
   wai
-// check disk drive status if command finished
+; check disk drive status if command finished
   cmp $0382
   beq wait
-// check if success
+; check if success
   lda $0382
   beq continue
 exit:
-// disable redbus
+; disable redbus
   mmu #$82
-// disable 16bit index and mem
+; disable 16bit index and mem
   sep #$30
-// enable 65c02 emulation
+; enable 65c02 emulation
   sec
   xce
-// jump to loaded code
+; jump to loaded code
   jmp $0500
 continue:
-// enable 16bit mem
+; enable 16bit mem
   rep #$20
-// i = 0x0300
+; i = 0x0300
   ldx #$0300
   txi
-// y = 0x40 // loop counter
+; y = 0x40 ; loop counter
   ldy #$0040
-copy:
-// copy word from disk sector into memory
+word_copy:
+; copy word from disk sector into memory
   nxa
   sta ($04)
   inc $04
   inc $04
-// y--
+; y--
   dey
-  bne copy
+  bne word_copy
 
-// check for wraparound
+; check for wraparound
   lda $04
   beq exit
-// sector number++
+; sector number++
   inc $02
   jmp next_sector
