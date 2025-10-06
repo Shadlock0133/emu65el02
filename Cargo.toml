@@ -10,4 +10,4 @@ minifb = "0.28.0"
 paste = "1.0.15"
 
 [patch.crates-io]
-minifb = { path = "../rust_minifb" }
+# minifb = { path = "../rust_minifb" }

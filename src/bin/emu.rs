@@ -180,6 +180,9 @@ fn main() {
                 (Key::Z, true) => Some(b'Z'),
 
                 (Key::Period, false) => Some(b'.'),
+                (Key::NumPadPlus, false) => Some(b'+'),
+                (Key::Slash, false) => Some(b'/'),
+                (Key::Slash, true) => Some(b'?'),
 
                 (Key::Backspace, _) => Some(b'\x08'),
                 (Key::Enter, _) => Some(b'\r'),

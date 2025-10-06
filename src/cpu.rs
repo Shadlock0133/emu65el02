@@ -6,6 +6,46 @@ use std::{
 
 use super::{mem::Mem, op, Decoder};
 
+trait IntHalves {
+    type Half;
+    fn lo(&self) -> Self::Half;
+    fn hi(&self) -> Self::Half;
+    fn set_lo(&mut self, lo: Self::Half);
+    fn set_hi(&mut self, hi: Self::Half);
+}
+
+impl IntHalves for u16 {
+    type Half = u8;
+    fn lo(&self) -> u8 {
+        self.to_le_bytes()[0]
+    }
+    fn hi(&self) -> u8 {
+        self.to_le_bytes()[1]
+    }
+    fn set_lo(&mut self, lo: u8) {
+        *self = u16::from_le_bytes([lo, self.hi()])
+    }
+    fn set_hi(&mut self, hi: u8) {
+        *self = u16::from_le_bytes([self.lo(), hi])
+    }
+}
+
+impl IntHalves for u32 {
+    type Half = u16;
+    fn lo(&self) -> u16 {
+        *self as u16
+    }
+    fn hi(&self) -> u16 {
+        (*self >> 16) as u16
+    }
+    fn set_lo(&mut self, lo: u16) {
+        *self = (*self & !0x0000ffff) | u32::from(lo);
+    }
+    fn set_hi(&mut self, hi: u16) {
+        *self = (*self & !0xffff0000) | (u32::from(hi) << 16);
+    }
+}
+
 const FLAG_C: u8 = 0x01;
 const FLAG_Z: u8 = 0x02;
 const FLAG_I: u8 = 0x04;
@@ -23,14 +63,6 @@ enum Reg {
     R,
     I,
     D,
-}
-
-const fn u16_lo_mut(x: &mut u16) -> &mut u8 {
-    if cfg!(target_endian = "little") {
-        unsafe { &mut *core::ptr::from_mut(x).cast() }
-    } else {
-        unsafe { &mut *core::ptr::from_mut(x).cast::<u8>().add(1) }
-    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -81,21 +113,6 @@ impl Default for DiskDrive {
     }
 }
 
-impl DiskDrive {
-    pub fn sector_lo(&self) -> u8 {
-        self.sector.to_le_bytes()[0]
-    }
-    pub fn sector_hi(&self) -> u8 {
-        self.sector.to_le_bytes()[1]
-    }
-    pub fn set_sector_lo(&mut self, lo: u8) {
-        self.sector = u16::from_le_bytes([lo, self.sector.to_le_bytes()[1]])
-    }
-    pub fn set_sector_hi(&mut self, hi: u8) {
-        self.sector = u16::from_le_bytes([self.sector.to_le_bytes()[0], hi])
-    }
-}
-
 const DISPLAY_WIDTH: usize = 80;
 const DISPLAY_HEIGHT: usize = 50;
 const KEY_BUFFER_SIZE: u8 = 16;
@@ -133,13 +150,14 @@ impl Default for Display {
 impl Display {
     pub fn current_key(&self) -> u8 {
         // todo: handle panic
-        self.key_buffer[usize::from(self.key_start)]
+        self.key_buffer[usize::from(self.key_start % KEY_BUFFER_SIZE)]
     }
 
     pub fn try_push_key(&mut self, value: u8) {
         if (self.key_start + 1) % KEY_BUFFER_SIZE != self.key_end {
-            self.key_buffer[usize::from(self.key_end)] = value;
-            self.key_end = (self.key_end + 1) % KEY_BUFFER_SIZE;
+            self.key_buffer[usize::from(self.key_end % KEY_BUFFER_SIZE)] =
+                value;
+            self.key_end = self.key_end.wrapping_add(1);
         }
     }
 }
@@ -258,8 +276,8 @@ impl Interconnect {
                 (0x02, 0x00..0x80) => {
                     self.disk_drive.buffer[usize::from(subaddr)]
                 }
-                (0x02, 0x80) => self.disk_drive.sector_lo(),
-                (0x02, 0x81) => self.disk_drive.sector_hi(),
+                (0x02, 0x80) => self.disk_drive.sector.lo(),
+                (0x02, 0x81) => self.disk_drive.sector.hi(),
                 (0x02, 0x82) => self.mem[addr],
                 _ => todo!(),
             }
@@ -291,8 +309,8 @@ impl Interconnect {
                 (0x02, 0x00..0x80, _) => {
                     self.disk_drive.buffer[usize::from(subaddr)] = value
                 }
-                (0x02, 0x80, _) => self.disk_drive.set_sector_lo(value),
-                (0x02, 0x81, _) => self.disk_drive.set_sector_hi(value),
+                (0x02, 0x80, _) => self.disk_drive.sector.set_lo(value),
+                (0x02, 0x81, _) => self.disk_drive.sector.set_hi(value),
                 (0x02, 0x82, 0x04) => {
                     let sector = self.disk_drive.sector;
                     let buf = &mut self.disk_drive.buffer;
@@ -451,9 +469,12 @@ impl Interconnect {
     }
 
     fn branch(&mut self, cond: bool) {
-        let offset = i8::from_le_bytes([self.read_byte_pc()]);
+        let offset = self.read_byte_pc();
         if cond {
-            self.regs.pc = self.regs.pc.wrapping_add_signed(offset.into());
+            self.regs.pc = self
+                .regs
+                .pc
+                .wrapping_add_signed(offset.cast_signed().into());
         }
     }
 
@@ -532,10 +553,8 @@ impl Interconnect {
         let (div, o) = lhs.overflowing_div(i32::from(rhs));
         let (rem, ro) = lhs.overflowing_rem(i32::from(rhs));
         assert_eq!(o, ro);
-        let div = div.to_le_bytes();
-        let rem = rem.to_le_bytes();
-        self.regs.a = u16::from_le_bytes([div[0], div[1]]);
-        self.regs.d = u16::from_le_bytes([rem[0], rem[1]]);
+        self.regs.a = div.cast_unsigned().lo();
+        self.regs.d = rem.cast_unsigned().lo();
         self.set_nz(self.regs.a);
         self.set_v(o);
     }
@@ -621,6 +640,9 @@ impl Interconnect {
             op::BNE => self.branch(!self.z()),
             op::BEQ => self.branch(self.z()),
 
+            op::JMP_ABS => self.regs.pc = self.read_word_pc(),
+            op::RTS => self.regs.pc = self.pl_nz() + 1,
+
             op::NXT => {
                 self.regs.pc = self.read_word(self.regs.i);
                 self.regs.i += 2;
@@ -665,10 +687,14 @@ impl Interconnect {
             op::PHY => self.ph(self.regs.y),
             op::PHD => self.ph(self.regs.d),
             op::PHX => self.ph(self.regs.x),
+            op::PEA_ABS => {
+                let value = self.read_word_pc();
+                self.ph(value)
+            }
             op::RHA => self.rh(self.regs.a),
             op::RHI => self.rh(self.regs.i),
 
-            op::PLP => self.regs.p = self.pl_nz().to_le_bytes()[0],
+            op::PLP => self.regs.p = self.pl_nz().lo(),
             op::PLA => self.regs.a = self.pl_nz(),
             op::PLD => self.regs.d = self.pl_nz(),
             op::PLX => self.regs.x = self.pl_nz(),
@@ -676,64 +702,7 @@ impl Interconnect {
             op::RLA => self.regs.a = self.rl_nz(),
             op::RLI => self.regs.i = self.rl_nz(),
 
-            op::JMP_ABS => self.regs.pc = self.read_word_pc(),
-            op::RTS => self.regs.pc = self.pl_nz() + 1,
-
-            op::INC_A => {
-                self.regs.a += 1;
-                self.set_nz(self.regs.a);
-            }
-            op::INX => {
-                self.regs.x += 1;
-                self.set_nz(self.regs.x);
-            }
-            op::DEC_A => {
-                self.regs.a -= 1;
-                self.set_nz(self.regs.a);
-            }
-            op::DEX => {
-                self.regs.x -= 1;
-                self.set_nz(self.regs.x);
-            }
-            op::EOR_IMM => {
-                self.regs.a ^= self.read_word_pc();
-                self.set_nz(self.regs.a);
-            }
-            op::DIV_ZP_X => {
-                let rhs = self.zp_x();
-                self.div(rhs)
-            }
-            op::ADC_R_S => {
-                let rhs = self.r_s();
-                self.adc(rhs);
-            }
             op::STZ_ZP => self.set_zp(0),
-            op::ROL_A => {
-                let new_c;
-                if !self.m() {
-                    new_c = (self.regs.a >> 15) & 1 != 0;
-                    self.regs.a = (self.regs.a << 1) | self.c() as u16;
-                } else {
-                    new_c = (self.regs.a >> 7) & 1 != 0;
-                    let value = ((self.regs.a as u8) << 1) | self.c() as u8;
-                    self.regs.a = (self.regs.a & !0xff) | value as u16;
-                }
-                self.set_c(new_c);
-                self.set_nz(self.regs.a);
-            }
-            op::ROR_A => {
-                let new_c = self.regs.a & 1 != 0;
-                let c = self.c();
-                if !self.m() {
-                    self.regs.a =
-                        (self.regs.a & !0x01 | c as u16).rotate_right(1);
-                } else {
-                    let a = u16_lo_mut(&mut self.regs.a);
-                    *a = (*a as u8 & !0x01 | c as u8).rotate_right(1);
-                }
-                self.set_c(new_c);
-                self.set_nz(self.regs.a);
-            }
             op::STA_R_S => self.r_s_do({
                 let a = self.regs.a;
                 move |x| *x = a
@@ -744,25 +713,6 @@ impl Interconnect {
             op::STA_ZP_X => self.set_zpx(self.regs.a),
             op::STA_ABS_X => self.set_abs_x(self.regs.a),
 
-            op::DEY => {
-                self.regs.y = self.regs.y.wrapping_sub(1);
-                self.set_nz(self.regs.y);
-            }
-            op::ZEA => {
-                self.regs.d = 0;
-                // todo: check if correct
-                if self.m() {
-                    self.regs.a &= !0xff00;
-                }
-            }
-            op::LDY_IMM => {
-                let value = self.read_word_pc();
-                self.ld(Reg::Y, value)
-            }
-            op::LDX_IMM => {
-                let value = self.read_word_pc();
-                self.ld(Reg::X, value)
-            }
             op::LDA_R_S => {
                 let value = self.r_s();
                 self.ld(Reg::A, value);
@@ -785,8 +735,41 @@ impl Interconnect {
                 let value = self.zp_x();
                 self.ld(Reg::A, value)
             }
+            op::LDY_IMM => {
+                let value = self.read_word_pc();
+                self.ld(Reg::Y, value)
+            }
+            op::LDX_IMM => {
+                let value = self.read_word_pc();
+                self.ld(Reg::X, value)
+            }
 
-            op::SBC_R_S => self.regs.a -= self.r_s(),
+            op::INC_A => {
+                self.regs.a = self.regs.a.wrapping_add(1);
+                self.set_nz(self.regs.a);
+            }
+            op::INC_ZP => self.zp_do(|x| *x = x.wrapping_add(1)),
+            op::INC_ABS => self.abs_do(|x| *x = x.wrapping_add(1)),
+            op::INX => {
+                self.regs.x = self.regs.x.wrapping_add(1);
+                self.set_nz(self.regs.x);
+            }
+            op::INY => {
+                self.regs.y = self.regs.y.wrapping_add(1);
+                self.set_nz(self.regs.y);
+            }
+            op::DEC_A => {
+                self.regs.a = self.regs.a.wrapping_sub(1);
+                self.set_nz(self.regs.a);
+            }
+            op::DEX => {
+                self.regs.x = self.regs.x.wrapping_sub(1);
+                self.set_nz(self.regs.x);
+            }
+            op::DEY => {
+                self.regs.y = self.regs.y.wrapping_sub(1);
+                self.set_nz(self.regs.y);
+            }
 
             op::CMP_R_S => {
                 let value = self.r_s();
@@ -801,12 +784,6 @@ impl Interconnect {
                 self.cmp(Reg::A, value)
             }
 
-            op::INC_ZP => self.zp_do(|x| *x = x.wrapping_add(1)),
-            op::INC_ABS => self.abs_do(|x| *x = x.wrapping_add(1)),
-            op::PEA_ABS => {
-                let value = self.read_word_pc();
-                self.ph(value)
-            }
             op::ORA_R_S => {
                 let value = self.r_s();
                 self.regs.a |= value;
@@ -817,10 +794,57 @@ impl Interconnect {
                 self.regs.a &= value;
                 self.set_nz(value);
             }
-
+            op::EOR_IMM => {
+                self.regs.a ^= self.read_word_pc();
+                self.set_nz(self.regs.a);
+            }
+            op::ADC_R_S => {
+                let rhs = self.r_s();
+                self.adc(rhs);
+            }
+            op::SBC_R_S => self.regs.a -= self.r_s(),
+            op::ROL_A => {
+                let new_c;
+                if !self.m() {
+                    new_c = (self.regs.a >> 15) & 1 != 0;
+                    self.regs.a = (self.regs.a << 1) | u16::from(self.c());
+                } else {
+                    new_c = (self.regs.a >> 7) & 1 != 0;
+                    let value = ((self.regs.a.lo()) << 1) | u8::from(self.c());
+                    self.regs.a = (self.regs.a & !0xff) | u16::from(value);
+                }
+                self.set_c(new_c);
+                self.set_nz(self.regs.a);
+            }
+            op::ROR_A => {
+                let new_c = self.regs.a & 1 != 0;
+                let c = self.c();
+                if !self.m() {
+                    self.regs.a =
+                        (self.regs.a & !0x01 | u16::from(c)).rotate_right(1);
+                } else {
+                    self.regs.a.set_lo(
+                        (self.regs.a.lo() & !0x01 | u8::from(c))
+                            .rotate_right(1),
+                    );
+                }
+                self.set_c(new_c);
+                self.set_nz(self.regs.a);
+            }
             op::MUL_ZP_X => {
                 let value = self.zp_x();
                 self.mul(value);
+            }
+            op::DIV_ZP_X => {
+                let rhs = self.zp_x();
+                self.div(rhs)
+            }
+            op::ZEA => {
+                self.regs.d = 0;
+                // todo: check if correct
+                if self.m() {
+                    self.regs.a.set_hi(0);
+                }
             }
 
             op::XBA => self.regs.a = self.regs.a.swap_bytes(),
