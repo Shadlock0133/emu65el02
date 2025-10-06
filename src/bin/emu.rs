@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, env, fs};
 
-use emu65el02::cpu::{self, Disk, Interconnect, RegFile};
+use emu65el02::cpu::{Disk, Interconnect, RegFile, StepError};
 use image::{GenericImageView, Pixel, Rgba};
 use minifb::{Key, KeyRepeat, WindowOptions};
 
@@ -80,7 +80,7 @@ fn main() {
 
     let mut interconnect = Interconnect::new(RPCBOOT);
     interconnect.labels = labels;
-    interconnect.disk_drive.0 = Some(Disk::new("System disk", disk));
+    interconnect.disk_drive.disk = Some(Disk::new("System disk", disk));
 
     let texture = image::open("displaygui.png").unwrap().into_rgba8();
     let bg = texture.view(0, 0, WIDTH, HEIGHT);
@@ -103,7 +103,10 @@ fn main() {
     let mut running = false;
     if run_to_disk {
         while interconnect.regs.pc != 0x500 {
-            let _ = interconnect.step(debug);
+            match interconnect.step(debug) {
+                Ok(()) | Err(StepError::Wai) => (),
+                Err(e) => panic!("{e:?}"),
+            }
         }
     }
     while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
@@ -176,6 +179,12 @@ fn main() {
                 (Key::Y, true) => Some(b'Y'),
                 (Key::Z, true) => Some(b'Z'),
 
+                (Key::Period, false) => Some(b'.'),
+
+                (Key::Backspace, _) => Some(b'\x08'),
+                (Key::Enter, _) => Some(b'\r'),
+                (Key::Space, _) => Some(b' '),
+
                 _ => None,
             };
             if let Some(rp_key) = rp_key {
@@ -242,12 +251,17 @@ fn main() {
 
         if running {
             for _ in 0..1000 {
-                if let Err(cpu::Wai) = interconnect.step(debug) {
-                    break;
+                match interconnect.step(debug) {
+                    Ok(()) => (),
+                    Err(StepError::Wai) => break,
+                    Err(e) => panic!("{e:?}"),
                 }
             }
         } else if window.is_key_pressed(Key::F11, KeyRepeat::Yes) {
-            let _ = interconnect.step(debug);
+            match interconnect.step(debug) {
+                Ok(()) | Err(StepError::Wai) => (),
+                Err(e) => panic!("{e:?}"),
+            }
         }
     }
 }
