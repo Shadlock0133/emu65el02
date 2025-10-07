@@ -33,11 +33,11 @@ impl SliceExt for [u8] {
 struct Word<'a> {
     name: &'a str,
     flag: u8,
-    prev: u16,
+    _prev: u16,
     code: &'a [u8],
 }
 
-fn compile_dict(rom: &[u8], latest: u16) -> BTreeMap<u16, Word> {
+fn compile_dict(rom: &[u8], latest: u16) -> BTreeMap<u16, Word<'_>> {
     let mut res = BTreeMap::new();
     let mut code_ptr = latest;
     let mut code_end = rom.len();
@@ -55,7 +55,7 @@ fn compile_dict(rom: &[u8], latest: u16) -> BTreeMap<u16, Word> {
             Word {
                 name,
                 flag,
-                prev,
+                _prev: prev,
                 code,
             },
         );
@@ -70,7 +70,7 @@ fn is_valid_ident(s: &str) -> bool {
     let mut chars = s.chars();
     chars
         .next()
-        .map_or(false, |ch| ch.is_ascii_alphabetic() || ch == '_')
+        .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 

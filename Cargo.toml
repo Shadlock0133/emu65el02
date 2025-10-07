@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-gdbstub = "0.7.3"
 image = { version = "0.25.8", default-features = false, features = ["png"] }
-minifb = "0.28.0"
+minifb = { version = "0.28.0", path = "../rust_minifb" }
 paste = "1.0.15"
-
-[patch.crates-io]
-# minifb = { path = "../rust_minifb" }
