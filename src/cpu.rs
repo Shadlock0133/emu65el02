@@ -4,7 +4,11 @@ use std::{
     io::{stderr, Write},
 };
 
-use super::{mem::Mem, op, Decoder};
+use super::{
+    devices::{DiskDrive, Display},
+    mem::Mem,
+    op, Decoder,
+};
 
 trait IntHalves {
     type Half;
@@ -77,89 +81,6 @@ pub struct RegFile {
     pub r: u16,
     pub i: u16,
     pub d: u16,
-}
-
-pub struct Disk {
-    name: [u8; 64],
-    data: Vec<u8>,
-}
-impl Disk {
-    pub fn new(name: &str, data: Vec<u8>) -> Self {
-        let mut name_buf = [0; 64];
-        name_buf[..name.len()].copy_from_slice(name.as_bytes());
-        Self {
-            name: name_buf,
-            data,
-        }
-    }
-}
-
-pub struct DiskDrive {
-    // mmio
-    pub buffer: [u8; 0x80],
-    pub sector: u16,
-
-    // hidden data
-    pub disk: Option<Disk>,
-}
-
-impl Default for DiskDrive {
-    fn default() -> Self {
-        Self {
-            buffer: [0; 0x80],
-            sector: Default::default(),
-            disk: Default::default(),
-        }
-    }
-}
-
-const DISPLAY_WIDTH: usize = 80;
-const DISPLAY_HEIGHT: usize = 50;
-const KEY_BUFFER_SIZE: u8 = 16;
-
-#[derive(Debug)]
-pub struct Display {
-    // mmio
-    pub memory_access_row: u8,
-    pub cursor_x: u8,
-    pub cursor_y: u8,
-    pub cursor_mode: u8,
-    pub key_start: u8,
-    pub key_end: u8,
-
-    // hidden data
-    pub key_buffer: [u8; KEY_BUFFER_SIZE as usize],
-    pub buffer: [u8; DISPLAY_WIDTH * DISPLAY_HEIGHT],
-}
-
-impl Default for Display {
-    fn default() -> Self {
-        Self {
-            memory_access_row: 0,
-            cursor_x: 0,
-            cursor_y: 0,
-            cursor_mode: 0,
-            key_buffer: [0; KEY_BUFFER_SIZE as usize],
-            key_start: 0,
-            key_end: 0,
-            buffer: [b' '; DISPLAY_WIDTH * DISPLAY_HEIGHT],
-        }
-    }
-}
-
-impl Display {
-    pub fn current_key(&self) -> u8 {
-        // todo: handle panic
-        self.key_buffer[usize::from(self.key_start % KEY_BUFFER_SIZE)]
-    }
-
-    pub fn try_push_key(&mut self, value: u8) {
-        if (self.key_start + 1) % KEY_BUFFER_SIZE != self.key_end {
-            self.key_buffer[usize::from(self.key_end % KEY_BUFFER_SIZE)] =
-                value;
-            self.key_end = self.key_end.wrapping_add(1);
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -272,13 +193,19 @@ impl Interconnect {
                 (0x01, 0x05) => self.display.key_end,
                 // code updates the start pointer
                 (0x01, 0x06) => self.display.current_key(),
-                // (0x01, 0x07..=0x0d) => self.mem[addr],
+                (0x01, 0x07) => self.display.blit_status,
+                (0x01, 0x08) => self.display.blit_x_start_fill_value,
+                (0x01, 0x09) => self.display.blit_y_start,
+                (0x01, 0x0a) => self.display.blit_x_offset,
+                (0x01, 0x0b) => self.display.blit_y_offset,
+                (0x01, 0x0c) => self.display.blit_width,
+                (0x01, 0x0d) => self.display.blit_height,
                 (0x02, 0x00..0x80) => {
                     self.disk_drive.buffer[usize::from(subaddr)]
                 }
                 (0x02, 0x80) => self.disk_drive.sector.lo(),
                 (0x02, 0x81) => self.disk_drive.sector.hi(),
-                (0x02, 0x82) => self.mem[addr],
+                (0x02, 0x82) => self.disk_drive.status,
                 _ => todo!(),
             }
         } else if self.mm_state
@@ -301,32 +228,26 @@ impl Interconnect {
                 (0x01, 0x02, _) => self.display.cursor_y = value,
                 (0x01, 0x03, _) => self.display.cursor_mode = value,
                 (0x01, 0x04, _) => self.display.key_start = value,
+                (0x01, 0x07, 0x01) => self.display.blit_fill(),
+                (0x01, 0x08, _) => self.display.blit_x_start_fill_value = value,
+                (0x01, 0x09, _) => self.display.blit_y_start = value,
+                (0x01, 0x0a, _) => self.display.blit_x_offset = value,
+                (0x01, 0x0b, _) => self.display.blit_y_offset = value,
+                (0x01, 0x0c, _) => self.display.blit_width = value,
+                (0x01, 0x0d, _) => self.display.blit_height = value,
                 (0x01, 0x10..=0x60, _) => {
                     let row = self.display.memory_access_row;
                     let i = usize::from(row) * 80 + usize::from(subaddr) - 0x10;
                     self.display.buffer[i] = value;
                 }
+
                 (0x02, 0x00..0x80, _) => {
                     self.disk_drive.buffer[usize::from(subaddr)] = value
                 }
                 (0x02, 0x80, _) => self.disk_drive.sector.set_lo(value),
                 (0x02, 0x81, _) => self.disk_drive.sector.set_hi(value),
-                (0x02, 0x82, 0x04) => {
-                    let sector = self.disk_drive.sector;
-                    let buf = &mut self.disk_drive.buffer;
-                    buf.fill(0);
-                    let disk = self.disk_drive.disk.as_mut();
-                    let data = disk.and_then(|disk| {
-                        disk.data.get(usize::from(sector) * 0x80..)
-                    });
-                    if let Some(data) = data {
-                        let data = &data[..0x80.min(data.len())];
-                        buf[..data.len()].copy_from_slice(data);
-                        self.mem[addr] = 0;
-                    } else {
-                        self.mem[addr] = 0xff;
-                    }
-                }
+                (0x02, 0x82, 0x04) => self.disk_drive.read_sector(),
+
                 _ => todo!(
                     "device {:#04x}: write {subaddr:#04x}",
                     self.device_id

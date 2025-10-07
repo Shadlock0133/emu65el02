@@ -4,7 +4,10 @@ use clap::Parser;
 use image::{GenericImageView, Pixel, Rgba};
 use minifb::{Key, KeyRepeat, WindowOptions};
 
-use emu65el02::cpu::{Disk, Interconnect, RegFile, StepError};
+use emu65el02::{
+    cpu::{Interconnect, RegFile, StepError},
+    devices::Disk,
+};
 
 const RPCBOOT: &[u8] = include_bytes!("../../rpcboot.bin");
 
@@ -242,18 +245,18 @@ fn main() {
                 (Key::Backquote, false, false) => Some(b'`'),
                 (Key::Backquote, false, true) => Some(b'~'),
                 (Key::Backquote, true, true) => Some(b'\x1e'),
-                
+
                 (Key::Minus, _, false) => Some(b'-'),
                 (Key::Minus, false, true) => Some(b'_'),
                 (Key::Minus, true, true) => Some(b'\x1f'),
                 (Key::Equal, _, false) => Some(b'='),
                 (Key::Equal, _, true) => Some(b'+'),
-                
+
                 (Key::Semicolon, _, false) => Some(b';'),
                 (Key::Semicolon, _, true) => Some(b':'),
                 (Key::Apostrophe, _, false) => Some(b'\''),
                 (Key::Apostrophe, _, true) => Some(b'"'),
-                
+
                 (Key::Comma, _, false) => Some(b','),
                 (Key::Comma, _, true) => Some(b'<'),
                 (Key::Period, _, false) => Some(b'.'),

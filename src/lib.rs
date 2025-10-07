@@ -1,6 +1,7 @@
 pub mod op;
 pub mod mem;
 pub mod cpu;
+pub mod devices;
 
 use core::fmt;
 
