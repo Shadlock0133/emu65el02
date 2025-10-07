@@ -1,8 +1,10 @@
-use std::{collections::BTreeMap, env, fs};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
-use emu65el02::cpu::{Disk, Interconnect, RegFile, StepError};
+use clap::Parser;
 use image::{GenericImageView, Pixel, Rgba};
 use minifb::{Key, KeyRepeat, WindowOptions};
+
+use emu65el02::cpu::{Disk, Interconnect, RegFile, StepError};
 
 const RPCBOOT: &[u8] = include_bytes!("../../rpcboot.bin");
 
@@ -53,15 +55,26 @@ const BUFFER_HEIGHT: usize = HEIGHT_U * 2 + 50;
 
 const OFFSET: [u32; 2] = [30, 30];
 
+#[derive(clap::Parser)]
+struct Opts {
+    #[clap(short, long)]
+    debug: bool,
+    #[clap(short, long)]
+    run_to_disk: bool,
+    disk: PathBuf,
+    #[clap(short = 'l', long)]
+    labels: Option<PathBuf>,
+}
+
 fn main() {
-    let debug = env::args_os().any(|x| x == "--debug" || x == "-d");
-    let run_to_disk = env::args_os().any(|x| x == "--run-to-disk" || x == "-r");
-    let mut args = env::args_os()
-        .skip(1)
-        .filter(|x| !x.to_string_lossy().starts_with("-"));
-    let disk = fs::read(args.next().expect("Missing file")).unwrap();
-    let labels: BTreeMap<u16, String> = args
-        .next()
+    let opts = Opts::parse();
+
+    let debug = opts.debug;
+    let run_to_disk = opts.run_to_disk;
+    let disk = fs::read(&opts.disk).unwrap();
+    let labels: BTreeMap<u16, String> = opts
+        .labels
+        .as_deref()
         .map(|path| fs::read_to_string(path).unwrap())
         .map(|labels| {
             labels
