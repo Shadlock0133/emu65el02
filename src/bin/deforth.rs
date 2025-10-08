@@ -155,10 +155,21 @@ fn disassembly_block(
             println!("{label}:");
         }
         let (instr, size) = decoder.decode(&block[usize::from(pc)..]).unwrap();
-        print!("  ");
+        let bytes = &block[usize::from(pc)..][..usize::from(size)];
+        let txt = match (&instr.opcode, &instr.argument) {
+            (op @ Opcode::Jmp, Some(Arguments::Abs(addr))) => {
+                format!("{op} {}", labels[addr])
+            }
+            (op, &Some(Arguments::Rel(r))) => {
+                let addr = addr.wrapping_add_signed(r.into()) + 2;
+                format!("{op} {}", labels[&addr])
+            }
+            _ => format!("{instr}"),
+        };
+        print!("  {txt:<30}");
+        write_addr_n_bytes_nl(addr, bytes);
         match (&instr.opcode, &instr.argument) {
             (Opcode::Rep, Some(Arguments::Imm(imm))) => {
-                println!("{instr}");
                 if imm & 0x20 != 0 {
                     println!("!al");
                 }
@@ -167,7 +178,6 @@ fn disassembly_block(
                 }
             }
             (Opcode::Sep, Some(Arguments::Imm(imm))) => {
-                println!("{instr}");
                 if imm & 0x20 != 0 {
                     println!("!as");
                 }
@@ -175,19 +185,18 @@ fn disassembly_block(
                     println!("!rs");
                 }
             }
-            (op @ Opcode::Jmp, Some(Arguments::Abs(addr))) => {
-                print!("{op} ");
-                println!("{}", labels[addr]);
-            }
-            (op, &Some(Arguments::Rel(r))) => {
-                print!("{op} ");
-                let addr = addr.wrapping_add_signed(r.into()) + 2;
-                println!("{}", labels[&addr]);
-            }
-            _ => println!("{instr}"),
+            _ => (),
         }
         pc += u16::from(size);
     }
+}
+
+fn write_addr_n_bytes_nl(addr: u16, bytes: &[u8]) {
+    print!(" ; {addr:04x}:");
+    for b in bytes {
+        print!(" {b:02x}");
+    }
+    println!()
 }
 
 fn main() {
@@ -225,11 +234,16 @@ fn main() {
     println!("!set prev = 0");
     println!(".FLAG_NONE = 0");
     println!(".FLAG_IMM = 1");
+    println!(".FLAG_HIDE = 2");
     println!();
     println!("* = {BASE_OFFSET:#06x}");
-    println!("start:");
     let mut decoder = Decoder::default();
-    disassembly_block(&mut decoder, &rom[..INTRO_SIZE], 0, &labels);
+    disassembly_block(
+        &mut decoder,
+        &rom[..INTRO_SIZE],
+        BASE_OFFSET.try_into().unwrap(),
+        &labels,
+    );
     let decoder = decoder;
     println!();
 
@@ -250,24 +264,27 @@ fn main() {
         let (instr, size) = decoder.clone().decode(word.code).unwrap();
         if matches!(instr.opcode, Opcode::Ent) {
             println!("{}:", labels[wordxp]);
-            println!("  {instr}");
+            let txt = format!("{instr}");
+            print!("  {txt:<30}");
+            write_addr_n_bytes_nl(*wordxp, &word.code[..usize::from(size)]);
             let mut pc = u16::from(size);
             while let Ok(xp) = word.code[usize::from(pc)..].read_u16_le() {
+                let start_pc = pc;
                 let addr = wordxp + pc;
                 if let Some(label) = labels.get(&addr) {
                     println!("{label}:");
                 }
                 let name = dict[&xp].name;
                 let label = &labels[&xp];
-                match name {
+                let txt = match name {
                     "(lit)" | "DOCON" | "DOVAR" => {
                         pc += 2;
                         let value =
                             word.code[usize::from(pc)..].read_u16_le().unwrap();
                         if let Some(label2) = labels.get(&value) {
-                            println!("  !16 {label}, {label2}",);
+                            format!("!16 {label}, {label2}")
                         } else {
-                            println!("  !16 {label}, {value:#06x}");
+                            format!("!16 {label}, {value:#06x}")
                         }
                     }
                     "(do)" | "(?do)" | "(loop)" | "(branch)" | "(?branch)" => {
@@ -276,37 +293,47 @@ fn main() {
                             word.code[usize::from(pc)..].read_u16_le().unwrap();
                         let offset = (value - wordxp) as i16 - pc as i16 + 2;
                         if let Some(label2) = labels.get(&value) {
-                            println!("  !16 {label}, {label2}");
+                            format!("!16 {label}, {label2}")
                         } else {
-                            println!("  !16 {label}, * + {offset} ; {name} {value:#06x}");
+                            format!("!16 {label}, * + {offset} ; {name} {value:#06x}")
                         }
                     }
                     "(.\")" => {
-                        println!("  !16 {label} ; {name}");
-                        print!("  !text \"");
-                        while word.code[usize::from(pc) + 2] != 0 {
-                            let ch = char::from(word.code[usize::from(pc) + 2]);
-                            if ch == '"' {
-                                print!("\\");
-                            }
-                            print!("{}", ch);
-                            pc += 1;
-                        }
-                        pc += 1;
-                        println!("\", 0");
+                        format!("!16 {label} ; {name}")
                     }
                     _ => {
-                        print!("  !16 {label}");
                         if label != name {
-                            print!(" ; {name}")
+                            format!("!16 {label} ; {name}")
+                        } else {
+                            format!("!16 {label}")
                         }
-                        println!()
                     }
-                }
+                };
+                print!("  {txt:<30}");
+                let bytes =
+                    &word.code[usize::from(start_pc)..usize::from(pc + 2)];
+                write_addr_n_bytes_nl(addr, bytes);
+                if name == "(.\")" {
+                    let mut txt = "!text \"".to_string();
+                    while word.code[usize::from(pc) + 2] != 0 {
+                        let ch = char::from(word.code[usize::from(pc) + 2]);
+                        if ch == '"' {
+                            txt.push('\\');
+                        }
+                        txt.push(ch);
+                        pc += 1;
+                    }
+                    pc += 1;
+                    txt.push_str("\", 0");
+
+                    println!("  {txt}");
+                };
                 pc += 2;
             }
             if !word.code[usize::from(pc)..].is_empty() {
-                println!("  !8 {}", word.code[usize::from(pc)]);
+                let txt = format!("!8 {}", word.code[usize::from(pc)]);
+                print!("  {txt:<30}");
+                write_addr_n_bytes_nl(pc, &word.code[usize::from(pc)..]);
             }
         } else {
             disassembly_block(
