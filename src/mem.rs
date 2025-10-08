@@ -14,6 +14,10 @@ impl Mem {
         mem[boot_addr.into()..][..boot_rom.len()].copy_from_slice(boot_rom);
         Self { mem, size }
     }
+
+    pub fn mem(&self) -> &[u8] {
+        &self.mem
+    }
 }
 
 impl Index<u16> for Mem {

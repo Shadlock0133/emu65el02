@@ -183,6 +183,10 @@ impl Interconnect {
             labels: BTreeMap::default(),
         }
     }
+
+    pub fn mem(&self) -> &[u8] {
+        self.mem.mem()
+    }
 }
 
 impl Interconnect {

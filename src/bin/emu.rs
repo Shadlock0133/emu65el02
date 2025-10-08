@@ -32,18 +32,17 @@ fn blend_font<I: GenericImageView<Pixel = Rgba<u8>>>(
     width: usize,
     x: u32,
     y: u32,
+    color: Rgba<u8>,
     image_view: &I,
 ) {
     for (dx, dy, mut p) in image_view.pixels() {
-        // blend to green
-        p.0[0] = 0;
-        p.0[2] = 0;
+        p.apply2(&color, |x, y| ((x as u16 * y as u16) >> 8) as u8);
         let i = usize::try_from(y + dy).unwrap() * width
             + usize::try_from(x + dx).unwrap();
         if let Some(b) = buf.get_mut(i) {
-            let mut color = Rgba(b.to_le_bytes());
-            color.blend(&p);
-            *b = u32::from_le_bytes(color.0);
+            let mut pixel = Rgba(b.to_le_bytes());
+            pixel.blend(&p);
+            *b = u32::from_le_bytes(pixel.0);
         }
     }
 }
@@ -54,7 +53,7 @@ const HEIGHT: u32 = 230;
 const HEIGHT_U: usize = HEIGHT as usize;
 
 const BUFFER_WIDTH: usize = WIDTH_U * 2;
-const BUFFER_HEIGHT: usize = HEIGHT_U * 2 + 50;
+const BUFFER_HEIGHT: usize = HEIGHT_U * 2 + 70;
 
 const OFFSET: [u32; 2] = [30, 30];
 
@@ -328,6 +327,7 @@ fn main() {
                     BUFFER_WIDTH,
                     OFFSET[0] + 8 * u32::from(x),
                     OFFSET[1] + 8 * u32::from(y),
+                    Rgba([0, 255, 0, 255]),
                     &*glyph,
                 );
             }
@@ -340,7 +340,9 @@ fn main() {
             let run = if running { "running" } else { "paused" };
             format!(
                 "{run:<8} ENVMXDIZC pc: {pc:#06x} a: {a:#06x} x: {x:#06x} y: {y:#06x}\n  \
-                flags: {e}{p:08b}  s: {s:#06x} r: {r:#06x} i: {i:#06x} d: {d:#06x}"
+                flags: {e}{p:08b}  s: {s:#06x} r: {r:#06x} i: {i:#06x} d: {d:#06x}\n\
+                s: [                                                 ]\n\
+                r: [                                                 ]"
             )
         };
         for (y, l) in regs.lines().enumerate() {
@@ -354,8 +356,63 @@ fn main() {
                 blend_font(
                     &mut buf,
                     BUFFER_WIDTH,
-                    30 + 8 * u32::try_from(x).unwrap(),
-                    HEIGHT * 2 + 16 + 8 * u32::try_from(y).unwrap(),
+                    8 * u32::try_from(x).unwrap() + 30,
+                    HEIGHT * 2 + 8 * u32::try_from(y).unwrap() + 16,
+                    Rgba([255; 4]),
+                    &*glyph,
+                );
+            }
+        }
+        let stack =
+            &interconnect.mem()[usize::from(interconnect.regs.s)..][..16];
+        for (n, byte) in stack.iter().rev().enumerate() {
+            let color = if *byte != 0 {
+                Rgba([255; 4])
+            } else {
+                Rgba([127; 4])
+            };
+            for (x, ch) in format!("{byte:02x}").bytes().enumerate() {
+                let glyph = font.view(
+                    u32::from(ch & 0xf) * 8,
+                    u32::from(ch >> 4) * 8,
+                    8,
+                    8,
+                );
+                blend_font(
+                    &mut buf,
+                    BUFFER_WIDTH,
+                    8 * (3 * u32::try_from(n).unwrap()
+                        + u32::try_from(x).unwrap())
+                        + 70,
+                    HEIGHT * 2 + 32,
+                    color,
+                    &*glyph,
+                );
+            }
+        }
+        let r_stack =
+            &interconnect.mem()[usize::from(interconnect.regs.r)..][..16];
+        for (n, byte) in r_stack.iter().rev().enumerate() {
+            let color = if *byte != 0 {
+                Rgba([255; 4])
+            } else {
+                Rgba([127; 4])
+            };
+            for (x, ch) in format!("{byte:02x}").bytes().enumerate() {
+                let glyph = font.view(
+                    u32::from(ch & 0xf) * 8,
+                    u32::from(ch >> 4) * 8,
+                    8,
+                    8,
+                );
+                blend_font(
+                    &mut buf,
+                    BUFFER_WIDTH,
+                    8 * (3 * u32::try_from(n).unwrap()
+                        + u32::try_from(x).unwrap())
+                        + 70,
+                    HEIGHT * 2 + 40,
+                    color,
                     &*glyph,
                 );
             }
