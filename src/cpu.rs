@@ -85,6 +85,7 @@ pub struct RegFile {
 
 #[derive(Debug)]
 pub enum StepError {
+    Stp,
     Wai,
     UD,
 }
@@ -97,6 +98,9 @@ pub struct Interconnect {
     rb_state: bool,
     mm_window: u16,
     mm_state: bool,
+    _brk_addr: u16,
+    _por_addr: u16,
+
     pub disk_drive: DiskDrive,
     pub display: Display,
     pub labels: BTreeMap<u16, String>,
@@ -170,6 +174,9 @@ impl Interconnect {
             rb_state: false,
             mm_window: 0,
             mm_state: false,
+            _brk_addr: 0,
+            _por_addr: 0,
+
             mem: Mem::new(8, boot_addr, boot_rom),
             disk_drive: Default::default(),
             display: Default::default(),
@@ -183,7 +190,7 @@ impl Interconnect {
         if self.rb_state
             && (self.rb_window..self.rb_window + 0x100).contains(&addr)
         {
-            let subaddr = addr - self.rb_window;
+            let subaddr = u8::try_from(addr - self.rb_window).unwrap();
             match (self.device_id, subaddr) {
                 (0x01, 0x00) => self.display.memory_access_row,
                 (0x01, 0x01) => self.display.cursor_x,
@@ -200,12 +207,14 @@ impl Interconnect {
                 (0x01, 0x0b) => self.display.blit_y_offset,
                 (0x01, 0x0c) => self.display.blit_width,
                 (0x01, 0x0d) => self.display.blit_height,
+
                 (0x02, 0x00..0x80) => {
                     self.disk_drive.buffer[usize::from(subaddr)]
                 }
                 (0x02, 0x80) => self.disk_drive.sector.lo(),
                 (0x02, 0x81) => self.disk_drive.sector.hi(),
                 (0x02, 0x82) => self.disk_drive.status,
+
                 _ => todo!(),
             }
         } else if self.mm_state
@@ -221,7 +230,7 @@ impl Interconnect {
         if self.rb_state
             && (self.rb_window..self.rb_window + 0x100).contains(&addr)
         {
-            let subaddr = addr - self.rb_window;
+            let subaddr = u8::try_from(addr - self.rb_window).unwrap();
             match (self.device_id, subaddr, value) {
                 (0x01, 0x00, _) => self.display.memory_access_row = value,
                 (0x01, 0x01, _) => self.display.cursor_x = value,
@@ -264,13 +273,13 @@ impl Interconnect {
 
     fn read_word(&mut self, addr: u16) -> u16 {
         let a = self.read_byte(addr);
-        let b = self.read_byte(addr + 1);
+        let b = self.read_byte(addr.wrapping_add(1));
         u16::from_le_bytes([a, b])
     }
 
     fn read_byte_pc(&mut self) -> u8 {
         let r = self.read_byte(self.regs.pc);
-        self.regs.pc += 1;
+        self.regs.pc = self.regs.pc.wrapping_add(1);
         r
     }
 
@@ -284,7 +293,7 @@ impl Interconnect {
         let addr = u16::from(self.read_byte_pc());
         let a = self.read_byte(addr);
         let b = if !self.m() {
-            self.read_byte(addr + 1)
+            self.read_byte(addr.wrapping_add(1))
         } else {
             0
         };
@@ -292,10 +301,10 @@ impl Interconnect {
     }
 
     fn zp_x(&mut self) -> u16 {
-        let addr = u16::from(self.read_byte_pc()) + self.regs.x;
+        let addr = u16::from(self.read_byte_pc()).wrapping_add(self.regs.x);
         let a = self.read_byte(addr);
         let b = if !self.m() {
-            self.read_byte(addr + 1)
+            self.read_byte(addr.wrapping_add(1))
         } else {
             0
         };
@@ -306,7 +315,7 @@ impl Interconnect {
         let addr = self.read_word_pc();
         let a = self.read_byte(addr);
         let b = if !self.m() {
-            self.read_byte(addr + 1)
+            self.read_byte(addr.wrapping_add(1))
         } else {
             0
         };
@@ -323,16 +332,16 @@ impl Interconnect {
         let addr = u16::from(self.read_byte_pc());
         self.write_byte(addr, a);
         if !self.m() {
-            self.write_byte(addr + 1, b);
+            self.write_byte(addr.wrapping_add(1), b);
         }
     }
 
     fn set_zpx(&mut self, value: u16) {
         let [a, b] = value.to_le_bytes();
-        let addr = u16::from(self.read_byte_pc()) + self.regs.x;
+        let addr = u16::from(self.read_byte_pc()).wrapping_add(self.regs.x);
         self.write_byte(addr, a);
         if !self.m() {
-            self.write_byte(addr + 1, b);
+            self.write_byte(addr.wrapping_add(1), b);
         }
     }
 
@@ -341,7 +350,7 @@ impl Interconnect {
         let [a, b] = value.to_le_bytes();
         self.write_byte(addr, a);
         if !self.m() {
-            self.write_byte(addr + 1, b);
+            self.write_byte(addr.wrapping_add(1), b);
         }
     }
 
@@ -350,7 +359,7 @@ impl Interconnect {
         let [a, b] = value.to_le_bytes();
         self.write_byte(addr, a);
         if !self.m() {
-            self.write_byte(addr + 1, b);
+            self.write_byte(addr.wrapping_add(1), b);
         }
     }
 
@@ -360,7 +369,7 @@ impl Interconnect {
         let [a, b] = value.to_le_bytes();
         self.write_byte(addr, a);
         if !self.m() {
-            self.write_byte(addr + 1, b);
+            self.write_byte(addr.wrapping_add(1), b);
         }
     }
 
@@ -382,9 +391,16 @@ impl Interconnect {
         self.set_nz(value);
     }
 
-    fn cmp(&mut self, reg: Reg, rhs: u16) {
-        let lhs = *self.reg(reg);
-        let (diff, o) = lhs.overflowing_sub(rhs);
+    fn cmp(&mut self, rhs: u16) {
+        let lhs = self.regs.a;
+        let (diff, o);
+        if !self.m() {
+            (diff, o) = lhs.overflowing_sub(rhs);
+        } else {
+            let diff8;
+            (diff8, o) = lhs.lo().overflowing_sub(rhs.lo());
+            diff = diff8.into();
+        }
         self.set_nz(diff);
         self.set_c(o);
     }
@@ -455,7 +471,16 @@ impl Interconnect {
     }
 
     fn adc(&mut self, rhs: u16) {
+        // TODO: handle carry flag
         let (res, o) = self.regs.a.overflowing_add(rhs);
+        self.regs.a = res;
+        self.set_nz(res);
+        self.set_v(o);
+    }
+
+    fn sbc(&mut self, rhs: u16) {
+        // TODO: handle carry flag
+        let (res, o) = self.regs.a.overflowing_sub(rhs);
         self.regs.a = res;
         self.set_nz(res);
         self.set_v(o);
@@ -470,14 +495,18 @@ impl Interconnect {
     }
 
     fn div(&mut self, rhs: u16) {
-        let lhs = (i32::from(self.regs.d) << 16) | i32::from(self.regs.a);
-        let (div, o) = lhs.overflowing_div(i32::from(rhs));
-        let (rem, ro) = lhs.overflowing_rem(i32::from(rhs));
-        assert_eq!(o, ro);
-        self.regs.a = div.cast_unsigned().lo();
-        self.regs.d = rem.cast_unsigned().lo();
-        self.set_nz(self.regs.a);
-        self.set_v(o);
+        if rhs == 0 {
+            panic!("div by zero")
+        } else {
+            let lhs = (i32::from(self.regs.d) << 16) | i32::from(self.regs.a);
+            let (div, o) = lhs.overflowing_div(i32::from(rhs));
+            let (rem, ro) = lhs.overflowing_rem(i32::from(rhs));
+            assert_eq!(o, ro);
+            self.regs.a = div.cast_unsigned().lo();
+            self.regs.d = rem.cast_unsigned().lo();
+            self.set_nz(self.regs.a);
+            self.set_v(o);
+        }
     }
 
     fn mmu(&mut self) {
@@ -485,11 +514,21 @@ impl Interconnect {
             0x00 => self.device_id = self.regs.a.to_le_bytes()[0],
             0x01 => self.rb_window = self.regs.a,
             0x02 => self.rb_state = true,
-            0x82 => self.rb_state = false,
             0x03 => self.mm_window = self.regs.a,
             0x04 => self.mm_state = true,
+            0x05 => self._brk_addr = self.regs.a,
+            0x06 => self._por_addr = self.regs.a,
+            
+            0x80 => self.regs.a.set_lo(self.device_id),
+            0x81 => self.regs.a = self.rb_window,
+            0x82 => self.rb_state = false,
+            0x83 => self.regs.a = self.mm_window,
             0x84 => self.mm_state = false,
-            0x06 => eprintln!("set por: {:#04x}", self.regs.a),
+            0x85 => self.regs.a = self._brk_addr,
+            0x86 => self.regs.a = self._por_addr,
+
+            0xff => eprintln!("A: {}", self.regs.a),
+
             _ => todo!(),
         }
     }
@@ -694,15 +733,15 @@ impl Interconnect {
 
             op::CMP_R_S => {
                 let value = self.r_s();
-                self.cmp(Reg::A, value)
+                self.cmp(value)
             }
             op::CMP_ABS => {
                 let value = self.abs();
-                self.cmp(Reg::A, value)
+                self.cmp(value)
             }
             op::CMP_ZP_X => {
                 let value = self.zp_x();
-                self.cmp(Reg::A, value)
+                self.cmp(value)
             }
 
             op::ORA_R_S => {
@@ -723,7 +762,10 @@ impl Interconnect {
                 let rhs = self.r_s();
                 self.adc(rhs);
             }
-            op::SBC_R_S => self.regs.a -= self.r_s(),
+            op::SBC_R_S => {
+                let value = self.r_s();
+                self.sbc(value)
+            }
             op::ROL_A => {
                 let new_c;
                 if !self.m() {
@@ -774,6 +816,7 @@ impl Interconnect {
                 mem::swap(&mut self.regs.emu, &mut c);
                 self.set_c(c);
             }
+            op::NOP => (),
             op::WAI => return Err(StepError::Wai),
             op::MMU => self.mmu(),
             op::UD => return Err(StepError::UD),
