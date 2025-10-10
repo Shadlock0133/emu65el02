@@ -85,6 +85,7 @@ pub struct RegFile {
 
 #[derive(Debug)]
 pub enum StepError {
+    Brk,
     Stp,
     Wai,
     UD,
@@ -315,6 +316,17 @@ impl Interconnect {
         u16::from_le_bytes([a, b])
     }
 
+    fn abs_x(&mut self) -> u16 {
+        let addr = self.read_word_pc().wrapping_add(self.regs.x);
+        let a = self.read_byte(addr);
+        let b = if !self.m() {
+            self.read_byte(addr.wrapping_add(1))
+        } else {
+            0
+        };
+        u16::from_le_bytes([a, b])
+    }
+
     fn abs(&mut self) -> u16 {
         let addr = self.read_word_pc();
         let a = self.read_byte(addr);
@@ -340,7 +352,7 @@ impl Interconnect {
         }
     }
 
-    fn set_zpx(&mut self, value: u16) {
+    fn set_zp_x(&mut self, value: u16) {
         let [a, b] = value.to_le_bytes();
         let addr = u16::from(self.read_byte_pc()).wrapping_add(self.regs.x);
         self.write_byte(addr, a);
@@ -359,7 +371,16 @@ impl Interconnect {
     }
 
     fn set_abs_x(&mut self, value: u16) {
-        let addr = self.read_word_pc() + self.regs.x;
+        let addr = self.read_word_pc().wrapping_add(self.regs.x);
+        let [a, b] = value.to_le_bytes();
+        self.write_byte(addr, a);
+        if !self.m() {
+            self.write_byte(addr.wrapping_add(1), b);
+        }
+    }
+
+    fn set_abs_y(&mut self, value: u16) {
+        let addr = self.read_word_pc().wrapping_add(self.regs.y);
         let [a, b] = value.to_le_bytes();
         self.write_byte(addr, a);
         if !self.m() {
@@ -522,7 +543,7 @@ impl Interconnect {
             0x04 => self.mm_state = true,
             0x05 => self._brk_addr = self.regs.a,
             0x06 => self._por_addr = self.regs.a,
-            
+
             0x80 => self.regs.a.set_lo(self.device_id),
             0x81 => self.regs.a = self.rb_window,
             0x82 => self.rb_state = false,
@@ -674,8 +695,9 @@ impl Interconnect {
             op::STA_ZP => self.set_zp(self.regs.a),
             op::STA_ABS => self.set_abs(self.regs.a),
             op::STA_IND => self.set_ind(self.regs.a),
-            op::STA_ZP_X => self.set_zpx(self.regs.a),
+            op::STA_ZP_X => self.set_zp_x(self.regs.a),
             op::STA_ABS_X => self.set_abs_x(self.regs.a),
+            op::STA_ABS_Y => self.set_abs_y(self.regs.a),
 
             op::LDA_R_S => {
                 let value = self.r_s();
@@ -697,6 +719,10 @@ impl Interconnect {
             }
             op::LDA_ZP_X => {
                 let value = self.zp_x();
+                self.ld(Reg::A, value)
+            }
+            op::LDA_ABS_X => {
+                let value = self.abs_x();
                 self.ld(Reg::A, value)
             }
             op::LDY_IMM => {
@@ -741,6 +767,12 @@ impl Interconnect {
             }
             op::CMP_ABS => {
                 let value = self.abs();
+                self.cmp(value)
+            }
+            op::CMP_IMM => {
+                let a = self.read_byte_pc();
+                let b = if !self.m() { self.read_byte_pc() } else { 0 };
+                let value = u16::from_le_bytes([a, b]);
                 self.cmp(value)
             }
             op::CMP_ZP_X => {
@@ -820,9 +852,11 @@ impl Interconnect {
                 mem::swap(&mut self.regs.emu, &mut c);
                 self.set_c(c);
             }
-            op::NOP => (),
-            op::WAI => return Err(StepError::Wai),
             op::MMU => self.mmu(),
+            op::NOP => (),
+            op::BRK => return Err(StepError::Brk),
+            op::STP => return Err(StepError::Stp),
+            op::WAI => return Err(StepError::Wai),
             op::UD => return Err(StepError::UD),
             _ => todo!("{op:#04x}"),
         }

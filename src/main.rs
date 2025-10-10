@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use clap::Parser;
-use image::{GenericImageView, Pixel, Rgba};
+use image::{GenericImageView, ImageFormat, Pixel, Rgba};
 use minifb::{Key, KeyRepeat, WindowOptions};
 
 use emu65el02::{
@@ -9,7 +9,8 @@ use emu65el02::{
     devices::Disk,
 };
 
-const RPCBOOT: &[u8] = include_bytes!("../../rpcboot.bin");
+const RPCBOOT: &[u8] = include_bytes!("../rpcboot.bin");
+const DISPLAY_GUI: &[u8] = include_bytes!("../displaygui.png");
 
 fn blit_bg_x2<I: GenericImageView<Pixel = Rgba<u8>>>(
     buf: &mut [u32],
@@ -97,7 +98,10 @@ fn main() {
     interconnect.labels = labels;
     interconnect.disk_drive.disk = Some(Disk::new("System disk", disk));
 
-    let texture = image::open("displaygui.png").unwrap().into_rgba8();
+    let texture =
+        image::load_from_memory_with_format(DISPLAY_GUI, ImageFormat::Png)
+            .unwrap()
+            .into_rgba8();
     let bg = texture.view(0, 0, WIDTH, HEIGHT);
     let font = texture.view(WIDTH, 0, 128, 128);
     let mut window = minifb::Window::new(
